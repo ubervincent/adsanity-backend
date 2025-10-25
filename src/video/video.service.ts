@@ -32,10 +32,18 @@ export class VideoService {
         });
     }
 
-    async generateVideo(prompt: string): Promise<VideoGenerationResult> {
-        this.logger.log(`Starting video generation for prompt: "${prompt}"`);
+    async generateVideo(prompt: string, image?: Express.Multer.File): Promise<VideoGenerationResult> {
+        this.logger.log(`Starting video generation for prompt: "${prompt}" and image: "${image ? image.originalname : 'none'}"`);
         try {
-            const video = await this.createVideoWithOpenAI(prompt);
+
+            let video;
+            if (image) {
+                const imageUrl = await this.uploadImageToBucket(image);
+                this.logger.log(`Image uploaded to: ${imageUrl}`);
+                video = await this.createVideoWithOpenAI(prompt, image);
+            } else {
+                video = await this.createVideoWithOpenAI(prompt);
+            }
 
             const pollResult = await this.pollForVideoCompletion(video.id, 5 * 60 * 1000, 2000);
 
@@ -58,6 +66,7 @@ export class VideoService {
 
             if (pollResult.status === 'failed') {
                 this.logger.error(`Video generation failed for ID: ${video.id}`);
+                this.logger.error(`Error: ${pollResult.error.message}`);
                 throw new HttpException('Video generation failed', HttpStatus.INTERNAL_SERVER_ERROR);
             }
 
@@ -73,11 +82,22 @@ export class VideoService {
         }
     }
 
-    private async createVideoWithOpenAI(prompt: string) {
-        const video = await this.openai.videos.create({
+    private async createVideoWithOpenAI(prompt: string, image?: Express.Multer.File) {
+        const params: OpenAI.VideoCreateParams = {
             model: 'sora-2',
+            seconds: '4',
             prompt,
-        });
+        };
+
+        if (image) {
+            const imageFile = new File([new Uint8Array(image.buffer)], image.originalname, {
+                type: image.mimetype
+            });
+            this.logger.log(`Image converted to File: ${image.originalname}`);
+            params.input_reference = imageFile;
+        }
+
+        const video = await this.openai.videos.create(params);
         this.logger.log(`Video created with ID: ${video.id}, status: ${video.status}`);
         return video;
     }
@@ -142,6 +162,28 @@ export class VideoService {
                 'Failed to upload video to storage',
                 HttpStatus.INTERNAL_SERVER_ERROR,
             );
+        }
+    }
+
+    private async uploadImageToBucket(image: Express.Multer.File): Promise<string> {
+        try {
+            const fileName = `images/${Date.now()}-${image.originalname}`;
+            const bucket = this.storage.bucket(this.bucketName);
+            const file = bucket.file(fileName);
+    
+            await file.save(image.buffer, {
+                metadata: {
+                    contentType: image.mimetype,
+                    metadata: {
+                        uploadedAt: new Date().toISOString(),
+                    }
+                }
+            });
+    
+            return `https://storage.googleapis.com/${this.bucketName}/${fileName}`;
+        } catch (error) {
+            this.logger.error(`Error uploading image: ${error.message}`);
+            throw new HttpException('Failed to upload image', HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 }

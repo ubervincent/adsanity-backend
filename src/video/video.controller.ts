@@ -1,6 +1,7 @@
-import { Controller, Post, Body, Logger } from '@nestjs/common';
+import { Controller, Post, Body, Logger, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { VideoService, VideoGenerationResult } from './video.service';
 import { CreateVideoDto } from './dto/create-video.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller()
 export class VideoController {
@@ -9,10 +10,14 @@ export class VideoController {
   constructor(private readonly videoService: VideoService) {}
 
   @Post('/video/generate')
-  async generateVideo(@Body() createVideoDto: CreateVideoDto): Promise<VideoGenerationResult> {
-    this.logger.log(`Received video generation request with prompt: "${createVideoDto.prompt}"`);
+  @UseInterceptors(FileInterceptor('image'))
+  async generateVideo(
+    @Body() createVideoDto: CreateVideoDto, 
+    @UploadedFile() image?: Express.Multer.File,
+  ): Promise<VideoGenerationResult> {
+    this.logger.log(`Received video generation request with prompt: "${createVideoDto.prompt}" and image: "${image ? image.originalname : 'none'}"`);
     
-    const result = await this.videoService.generateVideo(createVideoDto.prompt);
+    const result = await this.videoService.generateVideo(createVideoDto.prompt, image);
     
     this.logger.log(`Video generation completed successfully: ${result.videoId}`);
     
