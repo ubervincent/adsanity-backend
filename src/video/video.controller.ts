@@ -15,7 +15,7 @@ export class VideoController {
     @Body() createVideoDto: CreateVideoDto, 
     @UploadedFile() image?: Express.Multer.File,
   ): Promise<VideoGenerationResult> {
-    this.logger.log(`Received video generation request with prompt: "${createVideoDto.prompt}" and image: "${image ? image.originalname : 'none'}"`);
+    this.logger.debug(`Received video generation request with prompt length: "${createVideoDto.prompt.length}" and image: "${image ? "provided": 'none'}"`);
     
     const result = await this.videoService.generateVideo(createVideoDto.prompt, image);
     

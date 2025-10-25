@@ -12,7 +12,6 @@ export interface VideoGenerationResult {
     size: string;
     seconds: string;
 }
-
 @Injectable()
 export class VideoService {
     private readonly logger = new Logger(VideoService.name);
@@ -38,8 +37,7 @@ export class VideoService {
 
             let video;
             if (image) {
-                const imageUrl = await this.uploadImageToBucket(image);
-                this.logger.log(`Image uploaded to: ${imageUrl}`);
+                await this.uploadImageToBucket(image);
                 video = await this.createVideoWithOpenAI(prompt, image);
             } else {
                 video = await this.createVideoWithOpenAI(prompt);
@@ -107,15 +105,15 @@ export class VideoService {
         maxWaitTime: number,
         pollInterval: number,
     ): Promise<any> {
-        const startTime = Date.now();
-        while (Date.now() - startTime < maxWaitTime) {
-            const videoStatus = await this.openai.videos.retrieve(videoId);
-            this.logger.log(
-                `Video ${videoId} status: ${videoStatus.status}, progress: ${videoStatus.progress}%`,
-            );
+        const endTime = Date.now() + maxWaitTime;
 
-            if (['completed', 'failed'].includes(videoStatus.status)) {
-                return videoStatus;
+        while (Date.now() < endTime) {
+            const { status, progress, ...videoStatus } = await this.openai.videos.retrieve(videoId);
+
+            this.logger.log(`Video ${videoId} status: ${status}, progress: ${progress}%`);
+
+            if (status === 'completed' || status === 'failed') {
+                return { status, progress, ...videoStatus };
             }
 
             await this.delay(pollInterval);
@@ -129,7 +127,7 @@ export class VideoService {
     }
 
     private delay(ms: number): Promise<void> {
-        return new Promise((resolve) => setTimeout(resolve, ms));
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     private async streamVideoToBucket(videoId: string): Promise<string> {
@@ -165,7 +163,7 @@ export class VideoService {
         }
     }
 
-    private async uploadImageToBucket(image: Express.Multer.File): Promise<string> {
+    private async uploadImageToBucket(image: Express.Multer.File): Promise<void> {
         try {
             const fileName = `images/${Date.now()}-${image.originalname}`;
             const bucket = this.storage.bucket(this.bucketName);
@@ -180,7 +178,6 @@ export class VideoService {
                 }
             });
     
-            return `https://storage.googleapis.com/${this.bucketName}/${fileName}`;
         } catch (error) {
             this.logger.error(`Error uploading image: ${error.message}`);
             throw new HttpException('Failed to upload image', HttpStatus.INTERNAL_SERVER_ERROR);
