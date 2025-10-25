@@ -6,7 +6,9 @@ import { VideoModule } from './video/video.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({ 
+      isGlobal: true,
+    }),
     VideoModule,
   ],
   controllers: [AppController],
