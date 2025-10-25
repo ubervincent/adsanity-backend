@@ -21,13 +21,30 @@ export class VideoService {
 
 
     constructor(private configService: ConfigService) {
+        const requiredEnvVars = [
+            'OPENAI_API_KEY',
+            'GCP_STORAGE_BUCKET_NAME',
+            'GCP_PROJECT_ID',
+            'GCP_CREDENTIALS',
+        ];
+
+        const configValues = requiredEnvVars.reduce((values, key) => {
+            const value = this.configService.get<string>(key);
+            if (!value) {
+                throw new Error(`Missing required environment variable: ${key}`);
+            }
+            return { ...values, [key]: value };
+        }, {} as Record<string, string>);
+
         this.openai = new OpenAI({
-            apiKey: this.configService.get<string>('OPENAI_API_KEY'),
+            apiKey: configValues.OPENAI_API_KEY,
         });
-        this.bucketName = this.configService.get<string>('GCP_STORAGE_BUCKET_NAME') as string;
+
+        this.bucketName = configValues.GCP_STORAGE_BUCKET_NAME;
+
         this.storage = new Storage({
-            projectId: this.configService.get<string>('GCP_PROJECT_ID') as string,
-            credentials: require(path.resolve(this.configService.get<string>('GCP_CREDENTIALS') as string)),
+            projectId: configValues.GCP_PROJECT_ID,
+            credentials: require(path.resolve(configValues.GCP_CREDENTIALS)),
         });
     }
 
