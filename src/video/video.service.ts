@@ -81,7 +81,7 @@ export class VideoService {
 
             if (pollResult.status === 'failed') {
                 this.logger.error(`Video generation failed for ID: ${video.id}`);
-                this.logger.error(`Error: ${pollResult.error.message}`);
+                this.logger.error(`Error: ${pollResult.error.message || 'Unknown error'}`);
                 throw new HttpException('Video generation failed', HttpStatus.INTERNAL_SERVER_ERROR);
             }
 
