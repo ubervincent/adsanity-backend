@@ -60,7 +60,7 @@ export class VideoService {
                 video = await this.createVideoWithOpenAI(prompt);
             }
 
-            const pollResult = await this.pollForVideoCompletion(video.id, 5 * 60 * 1000, 2000);
+            const pollResult = await this.pollForVideoCompletion(video.id, 5 * 60 * 1000, 5000);
 
             if (pollResult.status === 'completed') {
                 const downloadUrl = await this.streamVideoToBucket(video.id);
@@ -137,6 +137,7 @@ export class VideoService {
         }
 
         this.logger.error(`Video generation timeout for ID: ${videoId}`);
+
         throw new HttpException(
             'Video generation timeout - please try again',
             HttpStatus.REQUEST_TIMEOUT,
@@ -149,9 +150,16 @@ export class VideoService {
 
     private async streamVideoToBucket(videoId: string): Promise<string> {
         try {
-            // Get the video content stream from OpenAI
             const content = await this.openai.videos.downloadContent(videoId);
             const buffer = Buffer.from(await content.arrayBuffer());
+
+            const MAX_VIDEO_SIZE = 100 * 1024 * 1024;
+            if (buffer.length > MAX_VIDEO_SIZE) {
+                throw new HttpException(
+                    'Video generated is too large. Maximum size is 100MB.',
+                    HttpStatus.PAYLOAD_TOO_LARGE,
+                );
+            }
 
             // Upload directly to GCP bucket (true streaming)
             const fileName = `videos/${videoId}.mp4`;
