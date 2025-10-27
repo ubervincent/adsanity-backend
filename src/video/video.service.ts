@@ -20,31 +20,39 @@ export class VideoService {
     private readonly bucketName: string;
 
 
-    constructor(private configService: ConfigService) {
-        const requiredEnvVars = [
+    constructor(private readonly configService: ConfigService) {
+        const envKeys = [
             'OPENAI_API_KEY',
             'GCP_STORAGE_BUCKET_NAME',
             'GCP_PROJECT_ID',
             'GCP_CREDENTIALS',
         ];
 
-        const configValues = requiredEnvVars.reduce((values, key) => {
-            const value = this.configService.get<string>(key);
-            if (!value) {
-                throw new Error(`Missing required environment variable: ${key}`);
-            }
-            return { ...values, [key]: value };
-        }, {} as Record<string, string>);
+        const config = Object.fromEntries(
+            envKeys.map(key => {
+                const value = this.configService.get<string>(key);
+                if (!value) {
+                    throw new Error(`Missing required environment variable: ${key}`);
+                }
+                return [key, value];
+            }),
+        ) as Record<string, string>;
 
-        this.openai = new OpenAI({
-            apiKey: configValues.OPENAI_API_KEY,
-        });
+        this.openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
+        this.bucketName = config.GCP_STORAGE_BUCKET_NAME;
 
-        this.bucketName = configValues.GCP_STORAGE_BUCKET_NAME;
+        let gcpCredentials;
+        try {
+            gcpCredentials = require(path.resolve(config.GCP_CREDENTIALS));
+        } catch (error: any) {
+            throw new Error(
+                `Failed to load GCP credentials from ${config.GCP_CREDENTIALS}: ${error?.message || error}`,
+            );
+        }
 
         this.storage = new Storage({
-            projectId: configValues.GCP_PROJECT_ID,
-            credentials: require(path.resolve(configValues.GCP_CREDENTIALS)),
+            projectId: config.GCP_PROJECT_ID,
+            credentials: gcpCredentials,
         });
     }
 
