@@ -1,126 +1,146 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { HttpException } from '@nestjs/common';
 import { VideoService } from './video.service';
-import OpenAI from 'openai';
+import { OpenAiVideoService } from './services/openai-video.service';
+import { KieVideoService } from './services/kie-video.service';
+import { VideoStorageService } from './services/video-storage.service';
 
-jest.mock('openai');
-
-describe('pollForVideoCompletion', () => {
+describe('VideoService', () => {
     let service: VideoService;
-    let mockConfigService: jest.Mocked<ConfigService>;
-    let mockOpenAI: jest.Mocked<OpenAI>;
+    let openAiService: jest.Mocked<OpenAiVideoService>;
+    let kieService: jest.Mocked<KieVideoService>;
+    let storageService: jest.Mocked<VideoStorageService>;
 
-  beforeEach(() => {
-    mockConfigService = {
-        get: jest.fn((key: string) => {
-            const config = {
-                OPENAI_API_KEY: 'test',
-                GCP_STORAGE_BUCKET_NAME: 'test',
-                GCP_PROJECT_ID: 'test',
-                GCP_CREDENTIALS: './credentials/key.json',
-            };
-            return config[key];
-        }),
-    } as any;
+    beforeEach(() => {
+        openAiService = {
+            createVideo: jest.fn(),
+            pollForCompletion: jest.fn(),
+            streamVideoToBucket: jest.fn(),
+        } as any;
 
-    mockOpenAI = {
-        videos: {
-            retrieve: jest.fn(),
-        },
-    } as any;
+        kieService = {
+            createVideo: jest.fn(),
+            pollForCompletion: jest.fn(),
+            downloadToBucket: jest.fn(),
+        } as any;
 
-    service = new VideoService(mockConfigService);
+        storageService = {
+            uploadImage: jest.fn(),
+            saveVideo: jest.fn(),
+        } as any;
 
-    (service as any).openai = mockOpenAI;
-  });
-
-  it('should poll for video completion', async () => {
-
-    (mockOpenAI.videos.retrieve as jest.Mock).mockResolvedValue({
-      status: 'completed',
-      progress: 100,
+        service = new VideoService(openAiService, kieService, storageService);
     });
 
-    const result = await service['pollForVideoCompletion']('video_68fc1c944cc48198852699ce1caaa42105761222ce0f1270', 60000, 1000);
+    describe('generateVideo', () => {
+        it('should generate a video without an image', async () => {
+            const mockVideo = {
+                id: 'video_123',
+                created_at: 1700000000,
+                model: 'sora-2',
+                size: '100MB',
+                seconds: '4',
+            } as any;
 
-    expect(result).toMatchObject({
-      status: 'completed',
-      progress: 100,
+            openAiService.createVideo.mockResolvedValue(mockVideo);
+            openAiService.pollForCompletion.mockResolvedValue({ status: 'completed' });
+            openAiService.streamVideoToBucket.mockResolvedValue('https://storage.googleapis.com/bucket/video.mp4');
+
+            const result = await service.generateVideo('test prompt');
+
+            expect(result).toMatchObject({
+                videoId: 'video_123',
+                status: 'completed',
+                createdAt: mockVideo.created_at,
+                downloadUrl: 'https://storage.googleapis.com/bucket/video.mp4',
+                model: 'sora-2',
+                size: '100MB',
+                seconds: '4',
+            });
+            expect(storageService.uploadImage).not.toHaveBeenCalled();
+        });
+
+        it('should upload the image when provided', async () => {
+            const mockVideo = {
+                id: 'video_456',
+                created_at: 1700000001,
+                model: 'sora-2',
+                size: '50MB',
+                seconds: '4',
+            } as any;
+
+            openAiService.createVideo.mockResolvedValue(mockVideo);
+            openAiService.pollForCompletion.mockResolvedValue({ status: 'completed' });
+            openAiService.streamVideoToBucket.mockResolvedValue('https://url');
+            storageService.uploadImage.mockResolvedValue('https://image');
+
+            const image = { originalname: 'image.png' } as Express.Multer.File;
+
+            await service.generateVideo('prompt', image);
+
+            expect(storageService.uploadImage).toHaveBeenCalledWith(image);
+        });
+
+        it('should throw when polling ends with failure', async () => {
+            const mockVideo = {
+                id: 'video_789',
+                created_at: 1700000002,
+                model: 'sora-2',
+                size: '70MB',
+                seconds: '6',
+            } as any;
+
+            openAiService.createVideo.mockResolvedValue(mockVideo);
+            openAiService.pollForCompletion.mockResolvedValue({
+                status: 'failed',
+                error: { message: 'boom' },
+            });
+
+            await expect(service.generateVideo('prompt')).rejects.toBeInstanceOf(HttpException);
+        });
     });
-  });
 
-  it('should return the failed status if the video generation fails', async () => {
-    (mockOpenAI.videos.retrieve as jest.Mock).mockResolvedValue({
-      status: 'failed',
+    describe('generateVideoWithKie', () => {
+        it('should generate a video with Kie', async () => {
+            storageService.uploadImage.mockResolvedValue('https://image');
+            kieService.createVideo.mockResolvedValue('task-123');
+            kieService.pollForCompletion.mockResolvedValue({
+                status: 'completed',
+                videoUrls: ['https://remote/video.mp4'],
+            });
+            kieService.downloadToBucket.mockResolvedValue('https://storage.googleapis.com/bucket/kie.mp4');
+
+            const image = { originalname: 'image.png' } as Express.Multer.File;
+
+            const result = await service.generateVideoWithKie('prompt', image);
+
+            expect(storageService.uploadImage).toHaveBeenCalledWith(image);
+            expect(kieService.createVideo).toHaveBeenCalledWith('prompt', ['https://image']);
+            expect(kieService.downloadToBucket).toHaveBeenCalledWith('https://remote/video.mp4', 'task-123');
+            expect(result).toMatchObject({
+                videoId: 'task-123',
+                status: 'completed',
+                downloadUrl: 'https://storage.googleapis.com/bucket/kie.mp4',
+            });
+        });
+
+        it('should throw when polling ends with failure', async () => {
+            kieService.createVideo.mockResolvedValue('task-321');
+            kieService.pollForCompletion.mockResolvedValue({
+                status: 'failed',
+                error: 'failed',
+            });
+
+            await expect(service.generateVideoWithKie('prompt')).rejects.toBeInstanceOf(HttpException);
+        });
+
+        it('should throw when video URL is missing', async () => {
+            kieService.createVideo.mockResolvedValue('task-999');
+            kieService.pollForCompletion.mockResolvedValue({
+                status: 'completed',
+                videoUrls: [],
+            });
+
+            await expect(service.generateVideoWithKie('prompt')).rejects.toBeInstanceOf(HttpException);
+        });
     });
-
-    const result = await service['pollForVideoCompletion']('video_68fc1c944cc48198852699ce1caaa42105761222ce0f1270', 60000, 1000);
-
-    expect(result).toMatchObject({
-      status: 'failed',
-    });
-  });
-
-  it('should run for a retrieve 3 times before throwing an error', async () => {
-    (mockOpenAI.videos.retrieve as jest.Mock).mockResolvedValue({
-      status: 'in_progress',
-      progress: 50,
-    });
-  
-    const promise = service['pollForVideoCompletion']('video_123', 3000, 1000);
-        
-    await expect(promise).rejects.toThrow('Video generation timeout - please try again');
-    
-    expect(mockOpenAI.videos.retrieve).toHaveBeenCalledTimes(3);
-  });
-});
-
-describe('generateVideo', () => {
-  let service: VideoService;
-  let mockConfigService: jest.Mocked<ConfigService>
-
-  beforeEach(() => {
-    mockConfigService = {
-      get: jest.fn((key: string) => {
-          const config = {
-              OPENAI_API_KEY: 'test',
-              GCP_STORAGE_BUCKET_NAME: 'test',
-              GCP_PROJECT_ID: 'test',
-              GCP_CREDENTIALS: './credentials/key.json',
-          };
-          return config[key];
-      }),
-  } as any;
-
-    service = new VideoService(mockConfigService);
-  })
-
-  it('should generate a video without an image', async () => {
-    const mockVideo = {
-      id: 'video_123',
-      created_at: new Date(),
-      model: 'sora-2',
-      size: '100MB',
-      seconds: '4',
-    } as any;
-
-    const mockPollResult = { status: 'completed' };
-    const mockDownloadUrl = 'https://storage.googleapis.com/bucket/video.mp4';
-    
-    jest.spyOn(service as any, 'createVideoWithOpenAI').mockResolvedValue(mockVideo);
-    jest.spyOn(service as any, 'pollForVideoCompletion').mockResolvedValue(mockPollResult);
-    jest.spyOn(service as any, 'streamVideoToBucket').mockResolvedValue(mockDownloadUrl);
-
-    const result = await service.generateVideo('test prompt');
-
-    expect(result).toMatchObject({
-      videoId: 'video_123',
-      status: 'completed',
-      createdAt: mockVideo.created_at,
-      downloadUrl: mockDownloadUrl,
-      model: mockVideo.model,
-      size: mockVideo.size,
-      seconds: mockVideo.seconds,
-    });
-  });
 });
