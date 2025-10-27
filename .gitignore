@@ -3,6 +3,12 @@
 /node_modules
 /build
 
+# data
+/data
+
+# GCP credentials
+/credentials
+
 # Logs
 logs
 *.log
